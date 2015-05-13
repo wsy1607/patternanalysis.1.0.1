@@ -1,12 +1,17 @@
 #Load packages
 import time
+import csv
 import pymongo
 import pandas
 from pandas import DataFrame
 from pymongo import MongoClient
 
-#define the function to get the last time for switching jobs
+
+#define the function to get info for connection swithcing jobs & promotion
 def getswitchjobtime(user):
+    #get bountyme id for this user
+    bountymeId = user.get('identity',{}).get('bountyUserId','')
+
     #get all connections for each user
     connections = user.get('connections',[])
 
@@ -25,6 +30,7 @@ def getswitchjobtime(user):
     for i, month in enumerate(month_list,1):
         month_conv[month] = i
 
+    #create basic metrics
     connectionList = []
     percentageSwitchedOneMonth = 0
     percentageSwitchedSixMonths = 0
@@ -45,6 +51,13 @@ def getswitchjobtime(user):
         connectionDate2 = connection.get('details',{}).get('threeCurrentPositions',{}).get('secondPos',{}).get('dates','').lower().encode('ascii','ignore')
         connectionDate3 = connection.get('details',{}).get('threeCurrentPositions',{}).get('thirdPos',{}).get('dates','').lower().encode('ascii','ignore')
 
+        #set default values
+        newPositionTime = 'NA'
+        switched = False
+        promoted = False
+        student = False
+
+        #get info for switching jobs/promotion and time
         if connectionCompany1 != connectionCompany2:
             if 'present' in connectionDate1:
                 if len(connectionDate1.split()) >= 3:
@@ -55,17 +68,12 @@ def getswitchjobtime(user):
                     jobYear = int(connectionDate1.split()[0])
                     jobMonth = 1
                     newPositionTime = (currentYear-jobYear)*12 + (currentMonth-jobMonth)
-                else:
-                    newPositionTime = 'NA'
-                status = "switched"
             else:
                 if len(connectionDate1.split()) == 4:
                     jobYear = int(connectionDate1.split()[3])
                     jobMonth = month_conv.get(connectionDate1.split()[2])
                     newPositionTime = (currentYear-jobYear)*12 + (currentMonth-jobMonth)
-                else:
-                    newPositionTime = 'NA'
-                status = "switched"
+            switched = True
         else:
             if 'present' in connectionDate1:
                 if len(connectionDate1.split()) >= 3:
@@ -76,17 +84,13 @@ def getswitchjobtime(user):
                     jobYear = int(connectionDate1.split()[0])
                     jobMonth = 1
                     newPositionTime = (currentYear-jobYear)*12 + (currentMonth-jobMonth)
-                else:
-                    newPositionTime = 'NA'
-                status = "promoted"
+                promoted = True
             else:
                 if len(connectionDate1.split()) == 4:
                     jobYear = int(connectionDate1.split()[3])
                     jobMonth = month_conv.get(connectionDate1.split()[2])
                     newPositionTime = (currentYear-jobYear)*12 + (currentMonth-jobMonth)
-                else:
-                    newPositionTime = 'NA'
-                status = "switched"
+                switched = True
 
         #filter by whether the connection is a current student
         if ('student' in connectionHeadline.lower() or
@@ -94,14 +98,13 @@ def getswitchjobtime(user):
             'candidate' in connectionHeadline.lower() or
             'fellow' in connectionHeadline.lower()):
             student = True
-        else:
-            student = False
 
         #see whether this connection switched/promoted since the last year
         if newPositionTime == 'NA':
             n = n - 1
+            #print connection.get("profile",{}).get('firstName','')
         else:
-            if status == "switched":
+            if switched == True:
                 if newPositionTime <= 1:
                     percentageSwitchedOneMonth = percentageSwitchedOneMonth + 1
                     percentageSwitchedSixMonths = percentageSwitchedSixMonths + 1
@@ -111,8 +114,7 @@ def getswitchjobtime(user):
                     percentageSwitchedOneYear = percentageSwitchedOneYear + 1
                 elif newPositionTime <= 12:
                     percentageSwitchedOneYear = percentageSwitchedOneYear + 1
-                    print connection.get("profile",{}).get('firstName','')
-            elif status == "promoted":
+            elif promoted == True:
                 if newPositionTime <= 1:
                     percentagePromotedOneMonth = percentagePromotedOneMonth + 1
                     percentagePromotedSixMonths = percentagePromotedSixMonths + 1
@@ -139,11 +141,18 @@ def getswitchjobtime(user):
         connection_dict["linkedInExternalId"] = connection.get('linkedin',{}).get('externalId','')
         connection_dict["profile"] = profile_dict
         connection_dict["identity"] = identity_dict
-        connection_dict["student"] = student
         connection_dict["headline"] = connectionHeadline
+        connection_dict["currentCompany"] = connectionCompany1
+        connection_dict["student"] = student
+        connection_dict["promoted"] = promoted
+        connection_dict["switched"] = switched
         connection_dict["newPositionTime"] = newPositionTime
-        connection_dict["status"] = status
         connectionList.append(connection_dict)
+
+        #print promoted
+        #print switched
+        #print newPositionTime
+        #print connection.get("profile",{}).get('firstName','')
 
     percentageSwitchedOneMonth = float(percentageSwitchedOneMonth)/n
     percentageSwitchedSixMonths = float(percentageSwitchedSixMonths)/n
@@ -153,11 +162,146 @@ def getswitchjobtime(user):
     percentagePromotedOneYear = float(percentagePromotedOneYear)/n
     percentageList = [percentageSwitchedOneMonth,percentageSwitchedSixMonths,percentageSwitchedOneYear,percentagePromotedOneMonth,percentagePromotedSixMonths,percentagePromotedOneYear]
 
-    print percentageList
+    userinfo = {}
+    userinfo["bountymeId"] = bountymeId
+    userinfo["connections"] = connectionList
+    userinfo["summary"] = {"all": percentageList}
+
+    return(userinfo)
+
+#define the function for filtering basic metrics for non-student
+def filterstudent(x):
+    #get number of connections for each user
+    connections = x.get("connections",[])
+    n = len(connections)
+
+    #create basic metrics
+    percentageSwitchedOneMonth = 0
+    percentageSwitchedSixMonths = 0
+    percentageSwitchedOneYear = 0
+    percentagePromotedOneMonth = 0
+    percentagePromotedSixMonths = 0
+    percentagePromotedOneYear = 0
+
+    #get job switching data for each connection
+    for connection in connections:
+        newPositionTime = connection.get("newPositionTime")
+        student = connection.get("student")
+        promoted = connection.get("promoted")
+        switched = connection.get("switched")
+
+        #calculate statistics based on filters
+        if newPositionTime == 'NA':
+            n = n - 1
+        else:
+            if student == False:
+                if switched == True:
+                    if newPositionTime <= 1:
+                        percentageSwitchedOneMonth = percentageSwitchedOneMonth + 1
+                        percentageSwitchedSixMonths = percentageSwitchedSixMonths + 1
+                        percentageSwitchedOneYear = percentageSwitchedOneYear + 1
+                    elif newPositionTime <= 6:
+                        percentageSwitchedSixMonths = percentageSwitchedSixMonths + 1
+                        percentageSwitchedOneYear = percentageSwitchedOneYear + 1
+                    elif newPositionTime <= 12:
+                        percentageSwitchedOneYear = percentageSwitchedOneYear + 1
+                elif promoted == True:
+                    if newPositionTime <= 1:
+                        percentagePromotedOneMonth = percentagePromotedOneMonth + 1
+                        percentagePromotedSixMonths = percentagePromotedSixMonths + 1
+                        percentagePromotedOneYear = percentagePromotedOneYear + 1
+                    elif newPositionTime <= 6:
+                        percentagePromotedSixMonths = percentagePromotedSixMonths + 1
+                        percentagePromotedOneYear = percentagePromotedOneYear + 1
+                    elif newPositionTime <= 12:
+                        percentagePromotedOneYear = percentagePromotedOneYear + 1
+
+    percentageSwitchedOneMonth = float(percentageSwitchedOneMonth)/n
+    percentageSwitchedSixMonths = float(percentageSwitchedSixMonths)/n
+    percentageSwitchedOneYear = float(percentageSwitchedOneYear)/n
+    percentagePromotedOneMonth = float(percentagePromotedOneMonth)/n
+    percentagePromotedSixMonths = float(percentagePromotedSixMonths)/n
+    percentagePromotedOneYear = float(percentagePromotedOneYear)/n
+    percentageList = [percentageSwitchedOneMonth,percentageSwitchedSixMonths,percentageSwitchedOneYear,percentagePromotedOneMonth,percentagePromotedSixMonths,percentagePromotedOneYear]
+
+    #append statistics into x
+    x["summary"]["winthoutStudent"] = percentageList
+
+    return(x)
+
+#define the function for filtering basic metrics for company info
+def filtercompany(x,companylist):
+    #get number of connections for each user
+    connections = x.get("connections",[])
+    n = len(connections)
+
+    #create basic metrics
+    percentageSwitchedOneMonth = 0
+    percentageSwitchedSixMonths = 0
+    percentageSwitchedOneYear = 0
+    percentagePromotedOneMonth = 0
+    percentagePromotedSixMonths = 0
+    percentagePromotedOneYear = 0
+
+    #get job switching data for each connection
+    for connection in connections:
+        newPositionTime = connection.get("newPositionTime")
+        student = connection.get("student")
+        promoted = connection.get("promoted")
+        switched = connection.get("switched")
+
+        #calculate statistics based on filters
+        if newPositionTime == 'NA':
+            n = n - 1
+        else:
+            if connection.get("currentCompany").lower() in companyList:
+                if switched == True:
+                    if newPositionTime <= 1:
+                        percentageSwitchedOneMonth = percentageSwitchedOneMonth + 1
+                        percentageSwitchedSixMonths = percentageSwitchedSixMonths + 1
+                        percentageSwitchedOneYear = percentageSwitchedOneYear + 1
+                    elif newPositionTime <= 6:
+                        percentageSwitchedSixMonths = percentageSwitchedSixMonths + 1
+                        percentageSwitchedOneYear = percentageSwitchedOneYear + 1
+                    elif newPositionTime <= 12:
+                        percentageSwitchedOneYear = percentageSwitchedOneYear + 1
+                elif promoted == True:
+                    if newPositionTime <= 1:
+                        percentagePromotedOneMonth = percentagePromotedOneMonth + 1
+                        percentagePromotedSixMonths = percentagePromotedSixMonths + 1
+                        percentagePromotedOneYear = percentagePromotedOneYear + 1
+                    elif newPositionTime <= 6:
+                        percentagePromotedSixMonths = percentagePromotedSixMonths + 1
+                        percentagePromotedOneYear = percentagePromotedOneYear + 1
+                    elif newPositionTime <= 12:
+                        percentagePromotedOneYear = percentagePromotedOneYear + 1
+
+    percentageSwitchedOneMonth = float(percentageSwitchedOneMonth)/n
+    percentageSwitchedSixMonths = float(percentageSwitchedSixMonths)/n
+    percentageSwitchedOneYear = float(percentageSwitchedOneYear)/n
+    percentagePromotedOneMonth = float(percentagePromotedOneMonth)/n
+    percentagePromotedSixMonths = float(percentagePromotedSixMonths)/n
+    percentagePromotedOneYear = float(percentagePromotedOneYear)/n
+    percentageList = [percentageSwitchedOneMonth,percentageSwitchedSixMonths,percentageSwitchedOneYear,percentagePromotedOneMonth,percentagePromotedSixMonths,percentagePromotedOneYear]
+
+    #append statistics into x
+    x["summary"]["targetCompany"] = percentageList
+
+    return(x)
+
 
 #connect to the Mongodb
 client = MongoClient('localhost', 3001)
 db = client.meteor
+
+#######################
+#the following session will be deleted
+#######################
+#import company list & school list locally
+with open('Fortune500.csv', 'rb') as inputCompanyList:
+    reader = csv.reader(inputCompanyList)
+    companyList = [x.lower() for x in list(reader)[0]]
+#######################
 
 #retrieve data for all bountyme users
 users = []
@@ -171,4 +315,4 @@ for user in db.users.find():
 for linkedinUser in db.LinkedInCollectionTest.find({"identity.bountyUserId":{"$in":userIds}}):
     linkedinUsers.append(linkedinUser)
 
-output = getswitchjobtime(linkedinUsers[0])
+output = filtercompany(filterstudent(getswitchjobtime(linkedinUsers[0])),companyList)
