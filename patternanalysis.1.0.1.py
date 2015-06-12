@@ -1,4 +1,5 @@
 #Load packages
+import re
 import time
 import csv
 import pymongo
@@ -17,6 +18,8 @@ def getswitchjobtime(user):
 
     #get number of connections for each user
     n = len(connections)
+    if n == 0:
+        n = 1
 
     #get current date
     currentDate = time.strftime("%d/%m/%Y")
@@ -44,9 +47,9 @@ def getswitchjobtime(user):
         connectionHeadline = connection.get('details',{}).get('headline','')
 
         #get job info for three last positions for each connection and convert to string
-        connectionCompany1 = connection.get('details',{}).get('threeCurrentPositions',{}).get('firstPos',{}).get('company','').lower().encode('ascii','ignore')
-        connectionCompany2 = connection.get('details',{}).get('threeCurrentPositions',{}).get('secondPos',{}).get('company','').lower().encode('ascii','ignore')
-        connectionCompany3 = connection.get('details',{}).get('threeCurrentPositions',{}).get('thirdPos',{}).get('company','').lower().encode('ascii','ignore')
+        connectionCompany1 = connection.get('details',{}).get('threeCurrentPositions',{}).get('firstPos',{}).get('company','None').lower().encode('ascii','ignore')
+        connectionCompany2 = connection.get('details',{}).get('threeCurrentPositions',{}).get('secondPos',{}).get('company','None').lower().encode('ascii','ignore')
+        connectionCompany3 = connection.get('details',{}).get('threeCurrentPositions',{}).get('thirdPos',{}).get('company','None').lower().encode('ascii','ignore')
         connectionDate1 = connection.get('details',{}).get('threeCurrentPositions',{}).get('firstPos',{}).get('dates','').lower().encode('ascii','ignore')
         connectionDate2 = connection.get('details',{}).get('threeCurrentPositions',{}).get('secondPos',{}).get('dates','').lower().encode('ascii','ignore')
         connectionDate3 = connection.get('details',{}).get('threeCurrentPositions',{}).get('thirdPos',{}).get('dates','').lower().encode('ascii','ignore')
@@ -142,7 +145,9 @@ def getswitchjobtime(user):
         connection_dict["profile"] = profile_dict
         connection_dict["identity"] = identity_dict
         connection_dict["headline"] = connectionHeadline
-        connection_dict["currentCompany"] = connectionCompany1
+        connection_dict["company1"] = connectionCompany1
+        connection_dict["company2"] = connectionCompany2
+        connection_dict["company3"] = connectionCompany3
         connection_dict["student"] = student
         connection_dict["promoted"] = promoted
         connection_dict["switched"] = switched
@@ -174,6 +179,8 @@ def filterstudent(x):
     #get number of connections for each user
     connections = x.get("connections",[])
     n = len(connections)
+    if n == 0:
+        n = 1
 
     #create basic metrics
     percentageSwitchedOneMonth = 0
@@ -229,11 +236,38 @@ def filterstudent(x):
 
     return(x)
 
+#define the function for cleaning the company list for matching
+def cleancompanylist(x):
+    #replace "The", "," by ""
+    for i,item in enumerate(x):
+        x[i] = re.sub(',','',re.sub('^the ','',item))
+    return(x)
+
+#define the function for cleaning the linkedin company name for matching
+def cleancompany(x):
+    connections = x.get("connections",[])
+    for i, connection in enumerate(connections):
+        cleanedCompany_list = []
+        company1 = connection.get("company1",'None')
+        company2 = connection.get("company2",'None')
+        company3 = connection.get("company3",'None')
+        companies = [company1, company2, company3]
+        for company in companies:
+            if ("university" in company) or ("college" in company) or (company == ""):
+                cleanedCompany_list.append("None")
+            else:
+                cleanedCompany_list.append(re.sub(',','',re.sub('^the ','',company.lower())))
+
+        x["connections"][i]["cleanedCompanies"] = cleanedCompany_list
+    return(x)
+
 #define the function for filtering basic metrics for company info
 def filtercompany(x,companylist):
     #get number of connections for each user
     connections = x.get("connections",[])
     n = len(connections)
+    if n == 0:
+        n = 1
 
     #create basic metrics
     percentageSwitchedOneMonth = 0
@@ -254,7 +288,18 @@ def filtercompany(x,companylist):
         if newPositionTime == 'NA':
             n = n - 1
         else:
-            if connection.get("currentCompany").lower() in companyList:
+            #print connection.get("cleanedCompany")[0].lower()
+            target = False
+            print connection.get("cleanedCompanies",[])
+            for cleanedCompany in connection.get("cleanedCompanies",[]):
+                for company in companyList:
+                    if cleanedCompany.lower().split()[0] == company.lower().split()[0]:
+                        target = True
+                        #print "yes"
+                        break
+                if target == True:
+                    break
+            if target == True:
                 if switched == True:
                     if newPositionTime <= 1:
                         percentageSwitchedOneMonth = percentageSwitchedOneMonth + 1
@@ -275,6 +320,9 @@ def filtercompany(x,companylist):
                         percentagePromotedOneYear = percentagePromotedOneYear + 1
                     elif newPositionTime <= 12:
                         percentagePromotedOneYear = percentagePromotedOneYear + 1
+            #else:
+                #print "no"
+
 
     percentageSwitchedOneMonth = float(percentageSwitchedOneMonth)/n
     percentageSwitchedSixMonths = float(percentageSwitchedSixMonths)/n
@@ -303,6 +351,9 @@ with open('Fortune500.csv', 'rb') as inputCompanyList:
     companyList = [x.lower() for x in list(reader)[0]]
 #######################
 
+#clean company list first for matching
+companyList = cleancompanylist(companyList)
+
 #retrieve data for all bountyme users
 users = []
 userIds = []
@@ -315,4 +366,14 @@ for user in db.users.find():
 for linkedinUser in db.LinkedInCollectionTest.find({"identity.bountyUserId":{"$in":userIds}}):
     linkedinUsers.append(linkedinUser)
 
-output = filtercompany(filterstudent(getswitchjobtime(linkedinUsers[0])),companyList)
+linkedinUsers.append({})
+print linkedinUsers
+output = []
+for everyUser in linkedinUsers:
+    temp1 = getswitchjobtime(everyUser)
+    temp2 = cleancompany(temp1)
+    temp3 = filterstudent(temp2)
+    temp4 = filtercompany(temp3,companyList)
+    #output.append(filtercompany(filterstudent(getswitchjobtime(everyUser)),companyList))
+    print temp4
+#print output
